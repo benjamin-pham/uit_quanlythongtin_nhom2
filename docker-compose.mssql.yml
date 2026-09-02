@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  mssql-uit-qltt:
+    image: mcr.microsoft.com/mssql/server:2019-latest
+    container_name: mssql-uit-qltt
+    environment:
+      SA_PASSWORD: "Str0ngP4ssw0rd!"
+      ACCEPT_EULA: "Y"
+    restart: none
+    volumes:
+      - mssql-uit-qltt:/var/lib/sqlserver/data
+    ports:
+      - "1444:1433"
+volumes:
+  mssql-uit-qltt:
+    driver: local
+    name: mssql-uit-qltt
