@@ -1,6 +1,7 @@
 using Microsoft.OpenApi;
 using Scalar.AspNetCore;
 using Serilog;
+using QuanLyThuVien.Server.Shared;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.Host.UseSerilog((context, loggerConfig) =>
@@ -12,6 +13,7 @@ builder.AddServiceDefaults();
 
 // Add services to the container.
 builder.Services.AddProblemDetails();
+builder.Services.AddEndpoints(typeof(Program).Assembly);
 
 // Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
 
@@ -78,12 +80,9 @@ api.MapGet("weatherforecast", () =>
 .WithName("GetWeatherForecast");
 
 app.MapDefaultEndpoints();
+app.MapEndpoints();
 
 
-app.MapGet("ping", () => "pong!")
-    .WithName("ping")
-    .WithTags("ping")
-    .WithGroupName("v1");
 
 app.UseFileServer();
 
