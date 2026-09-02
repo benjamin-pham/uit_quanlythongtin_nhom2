@@ -12,6 +12,9 @@ builder.Host.UseSerilog((context, loggerConfig) =>
 builder.AddServiceDefaults();
 
 // Add services to the container.
+builder.Services.AddScoped<System.Data.IDbConnection>(sp =>
+    new Microsoft.Data.SqlClient.SqlConnection(builder.Configuration.GetConnectionString("QuanLyThuVien")));
+
 builder.Services.AddProblemDetails();
 builder.Services.AddEndpoints(typeof(Program).Assembly);
 
