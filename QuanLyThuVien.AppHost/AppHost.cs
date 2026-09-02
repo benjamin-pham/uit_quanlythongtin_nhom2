@@ -1,13 +1,15 @@
 var builder = DistributedApplication.CreateBuilder(args);
 
-var mssql = builder.AddConnectionString("mssql", "Server=localhost,1444;Database=master;User Id=sa;Password=Str0ngP4ssw0rd!;TrustServerCertificate=True");
+var database = builder.AddSqlServer("Database")
+                   .WithDataVolume()
+                   .AddDatabase("QuanLyThuVien");
 
-var server = builder.AddProject<Projects.QuanLyThuVien_Server>("server")
-    .WithReference(mssql)
+var server = builder.AddProject<Projects.QuanLyThuVien_Server>("Backend")
+    .WithReference(database)
     .WithHttpHealthCheck("/health")
     .WithExternalHttpEndpoints();
 
-var webfrontend = builder.AddViteApp("webfrontend", "../frontend")
+var webfrontend = builder.AddViteApp("Frontend", "../frontend")
     .WithReference(server)
     .WaitFor(server);
 
