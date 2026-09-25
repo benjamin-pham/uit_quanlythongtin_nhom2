@@ -27,3 +27,4 @@ dist-ssr
 obj/Debug/
 obj/Release/
 obj/
+obj\\Debug/
