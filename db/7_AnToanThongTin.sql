@@ -1,0 +1,328 @@
+/* =====================================================================
+   File   : 07_AnToanThongTin.sql
+   Noi dung: AN TOAN THONG TIN
+     A. Xac thuc nguoi dung cua ung dung (bang TAIKHOAN, mat khau bam)
+     B. Xac thuc & phan quyen tren SQL Server (LOGIN, USER, ROLE,
+        GRANT / DENY / REVOKE)
+     C. Import / Export du lieu
+     D. Backup / Restore
+   ===================================================================== */
+
+USE QUANLYTHUVIEN
+GO
+
+/* =====================================================================
+   A. XAC THUC NGUOI DUNG CUA UNG DUNG
+   Mat khau khong luu dang ro: MATKHAU = SHA2_256(MUOI + mat khau)
+   ===================================================================== */
+
+/* SP tao tai khoan. Tra ve 0: trung ten dang nhap, 1: thanh cong */
+CREATE PROCEDURE SP_TAOTAIKHOAN
+	@TENDANGNHAP	VARCHAR(30),
+	@MATKHAU		NVARCHAR(100),
+	@VAITRO			NVARCHAR(20),
+	@MANV			CHAR(4) = NULL,
+	@MADG			CHAR(5) = NULL
+AS
+BEGIN
+	SET NOCOUNT ON
+	IF EXISTS (SELECT * FROM TAIKHOAN WHERE TENDANGNHAP = @TENDANGNHAP)
+	BEGIN
+		PRINT N'Tên đăng nhập đã tồn tại.'
+		RETURN 0
+	END
+
+	DECLARE @MUOI UNIQUEIDENTIFIER = NEWID()
+	INSERT INTO TAIKHOAN (TENDANGNHAP, MATKHAU, MUOI, VAITRO, MANV, MADG)
+	VALUES (@TENDANGNHAP,
+			HASHBYTES('SHA2_256', CAST(@MUOI AS NVARCHAR(36)) + @MATKHAU),
+			@MUOI, @VAITRO, @MANV, @MADG)
+	RETURN 1
+END
+GO
+
+/* SP dang nhap. Tra ve thong tin tai khoan neu dung, nguoc lai bang rong.
+   Tham so ra @KETQUA: 0 sai ten/mat khau, 1 tai khoan bi khoa, 2 thanh cong */
+CREATE PROCEDURE SP_DANGNHAP
+	@TENDANGNHAP	VARCHAR(30),
+	@MATKHAU		NVARCHAR(100),
+	@KETQUA			INT OUTPUT
+AS
+BEGIN
+	SET NOCOUNT ON
+	SET @KETQUA = 0
+
+	IF NOT EXISTS (SELECT * FROM TAIKHOAN
+				   WHERE TENDANGNHAP = @TENDANGNHAP
+					 AND MATKHAU = HASHBYTES('SHA2_256', CAST(MUOI AS NVARCHAR(36)) + @MATKHAU))
+	BEGIN
+		SELECT TOP 0 TENDANGNHAP, VAITRO, MANV, MADG FROM TAIKHOAN
+		RETURN
+	END
+
+	IF EXISTS (SELECT * FROM TAIKHOAN WHERE TENDANGNHAP = @TENDANGNHAP AND TRANGTHAI = 0)
+	BEGIN
+		SET @KETQUA = 1
+		SELECT TOP 0 TENDANGNHAP, VAITRO, MANV, MADG FROM TAIKHOAN
+		RETURN
+	END
+
+	SET @KETQUA = 2
+	SELECT TK.TENDANGNHAP, TK.VAITRO, TK.MANV, TK.MADG,
+		   ISNULL(NV.HOTEN, DG.HOTEN) AS HOTEN
+	FROM TAIKHOAN TK
+		LEFT JOIN NHANVIEN NV ON TK.MANV = NV.MANV
+		LEFT JOIN DOCGIA DG ON TK.MADG = DG.MADG
+	WHERE TK.TENDANGNHAP = @TENDANGNHAP
+END
+GO
+
+/* SP doi mat khau. Tra ve 0: sai mat khau cu, 1: thanh cong */
+CREATE PROCEDURE SP_DOIMATKHAU
+	@TENDANGNHAP	VARCHAR(30),
+	@MATKHAUCU		NVARCHAR(100),
+	@MATKHAUMOI		NVARCHAR(100)
+AS
+BEGIN
+	SET NOCOUNT ON
+	IF NOT EXISTS (SELECT * FROM TAIKHOAN
+				   WHERE TENDANGNHAP = @TENDANGNHAP
+					 AND MATKHAU = HASHBYTES('SHA2_256', CAST(MUOI AS NVARCHAR(36)) + @MATKHAUCU))
+		RETURN 0
+
+	DECLARE @MUOI UNIQUEIDENTIFIER = NEWID()
+	UPDATE TAIKHOAN
+	SET MUOI = @MUOI,
+		MATKHAU = HASHBYTES('SHA2_256', CAST(@MUOI AS NVARCHAR(36)) + @MATKHAUMOI)
+	WHERE TENDANGNHAP = @TENDANGNHAP
+	RETURN 1
+END
+GO
+
+/*NHAP DU LIEU TAIKHOAN (mat khau mau: 123456)*/
+EXEC SP_TAOTAIKHOAN 'admin',	N'123456', N'Quản lý', 'NV01', NULL
+EXEC SP_TAOTAIKHOAN 'qlminh',	N'123456', N'Quản lý', 'NV08', NULL
+EXEC SP_TAOTAIKHOAN 'ttkhoa',	N'123456', N'Thủ thư', 'NV02', NULL
+EXEC SP_TAOTAIKHOAN 'ttyen',	N'123456', N'Thủ thư', 'NV03', NULL
+EXEC SP_TAOTAIKHOAN 'tttri',	N'123456', N'Thủ thư', 'NV04', NULL
+EXEC SP_TAOTAIKHOAN 'ttlan',	N'123456', N'Thủ thư', 'NV05', NULL
+EXEC SP_TAOTAIKHOAN 'dg001',	N'123456', N'Độc giả', NULL, 'DG001'
+EXEC SP_TAOTAIKHOAN 'dg002',	N'123456', N'Độc giả', NULL, 'DG002'
+EXEC SP_TAOTAIKHOAN 'dg007',	N'123456', N'Độc giả', NULL, 'DG007'
+EXEC SP_TAOTAIKHOAN 'dg009',	N'123456', N'Độc giả', NULL, 'DG009'
+UPDATE TAIKHOAN SET TRANGTHAI = 0 WHERE TENDANGNHAP = 'dg009'	-- tai khoan bi khoa
+GO
+
+/* =====================================================================
+   B. XAC THUC & PHAN QUYEN TREN SQL SERVER
+   3 nhom nguoi dung: Quan ly, Thu thu, Doc gia
+   ===================================================================== */
+
+/* B.1 Tao LOGIN (muc server) - xoa neu da ton tai de chay lai duoc */
+USE master
+GO
+IF SUSER_ID('LG_QUANLY') IS NOT NULL DROP LOGIN LG_QUANLY
+IF SUSER_ID('LG_THUTHU') IS NOT NULL DROP LOGIN LG_THUTHU
+IF SUSER_ID('LG_DOCGIA') IS NOT NULL DROP LOGIN LG_DOCGIA
+GO
+CREATE LOGIN LG_QUANLY WITH PASSWORD = 'QuanLy@2026', DEFAULT_DATABASE = QUANLYTHUVIEN, CHECK_POLICY = ON
+CREATE LOGIN LG_THUTHU WITH PASSWORD = 'ThuThu@2026', DEFAULT_DATABASE = QUANLYTHUVIEN, CHECK_POLICY = ON
+CREATE LOGIN LG_DOCGIA WITH PASSWORD = 'DocGia@2026', DEFAULT_DATABASE = QUANLYTHUVIEN, CHECK_POLICY = ON
+GO
+
+/* B.2 Tao USER (muc CSDL) anh xa voi LOGIN */
+USE QUANLYTHUVIEN
+GO
+CREATE USER U_QUANLY FOR LOGIN LG_QUANLY
+CREATE USER U_THUTHU FOR LOGIN LG_THUTHU
+CREATE USER U_DOCGIA FOR LOGIN LG_DOCGIA
+GO
+
+/* B.3 Tao ROLE va gan USER vao ROLE */
+CREATE ROLE R_QUANLY
+CREATE ROLE R_THUTHU
+CREATE ROLE R_DOCGIA
+GO
+ALTER ROLE R_QUANLY ADD MEMBER U_QUANLY
+ALTER ROLE R_THUTHU ADD MEMBER U_THUTHU
+ALTER ROLE R_DOCGIA ADD MEMBER U_DOCGIA
+GO
+
+/* B.4 Phan quyen */
+-- QUAN LY: toan quyen du lieu, thuc thi moi SP, duoc sao luu CSDL
+ALTER ROLE db_datareader		ADD MEMBER R_QUANLY
+ALTER ROLE db_datawriter		ADD MEMBER R_QUANLY
+ALTER ROLE db_backupoperator	ADD MEMBER R_QUANLY
+GRANT EXECUTE ON SCHEMA::dbo TO R_QUANLY
+GO
+
+-- THU THU: xem tat ca (tru tai khoan), them/sua nghiep vu muon tra,
+--          KHONG duoc xoa bat ky du lieu nao, khong sua thong tin nhan vien
+GRANT SELECT ON SCHEMA::dbo TO R_THUTHU
+GRANT INSERT, UPDATE ON DOCGIA		TO R_THUTHU
+GRANT INSERT, UPDATE ON PHIEUMUON	TO R_THUTHU
+GRANT INSERT, UPDATE ON CTPHIEUMUON	TO R_THUTHU
+GRANT INSERT, UPDATE ON PHIEUPHAT	TO R_THUTHU
+GRANT INSERT, UPDATE ON CUONSACH	TO R_THUTHU
+GRANT INSERT, UPDATE ON DAUSACH		TO R_THUTHU
+GRANT EXECUTE ON SP_THEMDOCGIA		TO R_THUTHU
+GRANT EXECUTE ON SP_TIMSACH			TO R_THUTHU
+GRANT EXECUTE ON SP_LAPPHIEUMUON	TO R_THUTHU
+GRANT EXECUTE ON SP_TRASACH			TO R_THUTHU
+GRANT EXECUTE ON SP_THANHTOANPHAT	TO R_THUTHU
+GRANT EXECUTE ON SP_CURSOR_NHACNHOQUAHAN TO R_THUTHU
+DENY DELETE ON SCHEMA::dbo			TO R_THUTHU
+DENY SELECT ON TAIKHOAN				TO R_THUTHU
+DENY INSERT, UPDATE ON NHANVIEN		TO R_THUTHU
+GO
+
+-- DOC GIA: chi tra cuu danh muc sach, khong xem thong tin ca nhan nguoi khac,
+--          khong duoc them / sua / xoa
+GRANT SELECT ON DAUSACH			TO R_DOCGIA
+GRANT SELECT ON THELOAI			TO R_DOCGIA
+GRANT SELECT ON TACGIA			TO R_DOCGIA
+GRANT SELECT ON DAUSACH_TACGIA	TO R_DOCGIA
+GRANT SELECT ON NHAXUATBAN		TO R_DOCGIA
+GRANT SELECT ON CUONSACH (MACS, MADS, VITRI, TINHTRANG) TO R_DOCGIA	-- phan quyen muc cot
+GRANT EXECUTE ON SP_TIMSACH		TO R_DOCGIA
+DENY SELECT ON DOCGIA			TO R_DOCGIA
+DENY SELECT ON NHANVIEN			TO R_DOCGIA
+DENY SELECT ON TAIKHOAN			TO R_DOCGIA
+DENY INSERT, UPDATE, DELETE ON SCHEMA::dbo TO R_DOCGIA
+GO
+
+-- Minh hoa REVOKE: cap roi thu hoi quyen xem phieu phat cua doc gia
+GRANT SELECT ON PHIEUPHAT TO R_DOCGIA
+REVOKE SELECT ON PHIEUPHAT FROM R_DOCGIA
+GO
+
+/* B.5 Kiem tra phan quyen (chay thu voi tu cach tung user)
+EXECUTE AS USER = 'U_THUTHU'
+	SELECT TOP 3 * FROM DOCGIA				-- duoc phep
+	DELETE FROM PHIEUPHAT WHERE MAPP = 'PP0001'	-- bi tu choi (DENY DELETE)
+REVERT
+
+EXECUTE AS USER = 'U_DOCGIA'
+	EXEC SP_TIMSACH N'Harry'				-- duoc phep
+	SELECT * FROM DOCGIA					-- bi tu choi (DENY SELECT)
+REVERT
+
+-- Xem quyen hien tai cua cac role
+SELECT pr.name AS ROLE_NAME, pe.permission_name, pe.state_desc,
+	   OBJECT_NAME(pe.major_id) AS DOITUONG
+FROM sys.database_permissions pe
+	JOIN sys.database_principals pr ON pe.grantee_principal_id = pr.principal_id
+WHERE pr.name IN ('R_QUANLY', 'R_THUTHU', 'R_DOCGIA')
+ORDER BY pr.name, DOITUONG
+*/
+
+/* =====================================================================
+   C. IMPORT / EXPORT
+   ===================================================================== */
+
+/* C.1 IMPORT danh sach doc gia moi tu file CSV
+   File mau: database/data/DOCGIA_IMPORT.csv - ma hoa UTF-16 (Unicode), xuong
+   dong CRLF, dong dau la tieu de. Day la dinh dang Excel xuat ra khi chon
+   "Save As > Unicode Text" / "CSV UTF-16", giu duoc tieng Viet co dau tren
+   ca SQL Server Windows lan Linux (DATAFILETYPE = 'widechar').
+   Duong dan la duong dan TREN MAY CHAY SQL SERVER. Voi Docker:
+     docker cp database/data/DOCGIA_IMPORT.csv <container>:/tmp/DOCGIA_IMPORT.csv
+
+CREATE TABLE #DOCGIA_IMPORT
+(
+	MADG NVARCHAR(5), HOTEN NVARCHAR(40), NGSINH DATE, GIOITINH NVARCHAR(3),
+	DIACHI NVARCHAR(100), SODT NVARCHAR(15), EMAIL NVARCHAR(50), MALDG NVARCHAR(2)
+)
+
+BULK INSERT #DOCGIA_IMPORT
+FROM '/tmp/DOCGIA_IMPORT.csv'			-- Windows: 'C:\Data\DOCGIA_IMPORT.csv'
+WITH (FORMAT = 'CSV', DATAFILETYPE = 'widechar', FIRSTROW = 2,
+	  FIELDTERMINATOR = ',', ROWTERMINATOR = '\r\n')
+
+-- Chi them nhung doc gia chua ton tai (rang buoc CHECK / FK van duoc kiem tra)
+INSERT INTO DOCGIA (MADG, HOTEN, NGSINH, GIOITINH, DIACHI, SODT, EMAIL, MALDG, NGAYLAPTHE, NGAYHETHAN)
+SELECT MADG, HOTEN, NGSINH, GIOITINH, NULLIF(DIACHI, ''), SODT, NULLIF(EMAIL, ''), MALDG,
+	   CAST(GETDATE() AS DATE), DATEADD(YEAR, 2, CAST(GETDATE() AS DATE))
+FROM #DOCGIA_IMPORT I
+WHERE NOT EXISTS (SELECT * FROM DOCGIA DG WHERE DG.MADG = I.MADG COLLATE DATABASE_DEFAULT)
+
+DROP TABLE #DOCGIA_IMPORT
+*/
+
+/* C.2 EXPORT du lieu ra file CSV bang cong cu bcp (chay tren command line):
+
+bcp "SELECT MADS, TENDS, SOLUONG, SLCON FROM QUANLYTHUVIEN.dbo.DAUSACH" queryout DAUSACH.csv -c -C 65001 -t, -S localhost,1444 -U sa -P "<mat khau>"
+
+   Hoac dung giao dien SSMS: chuot phai CSDL > Tasks > Export Data... > chon
+   Destination = Microsoft Excel / Flat File.
+*/
+
+/* =====================================================================
+   D. BACKUP / RESTORE
+   ===================================================================== */
+
+/* SP sao luu CSDL (goi tu ung dung). Loai: 'FULL' hoac 'DIFF' */
+CREATE PROCEDURE SP_SAOLUU
+	@DUONGDAN	NVARCHAR(260),
+	@LOAI		VARCHAR(4) = 'FULL'
+AS
+BEGIN
+	SET NOCOUNT ON
+	IF @LOAI = 'DIFF'
+		BACKUP DATABASE QUANLYTHUVIEN TO DISK = @DUONGDAN
+		WITH DIFFERENTIAL, INIT, NAME = N'QUANLYTHUVIEN - Differential Backup'
+	ELSE
+		BACKUP DATABASE QUANLYTHUVIEN TO DISK = @DUONGDAN
+		WITH INIT, NAME = N'QUANLYTHUVIEN - Full Backup'
+
+	-- Lich su sao luu
+	SELECT TOP 10 bs.backup_start_date, bs.backup_finish_date,
+		   CASE bs.type WHEN 'D' THEN 'FULL' WHEN 'I' THEN 'DIFF' WHEN 'L' THEN 'LOG' END AS LOAI,
+		   bmf.physical_device_name AS DUONGDAN,
+		   CAST(bs.backup_size / 1024.0 / 1024 AS DECIMAL(10, 2)) AS DUNGLUONG_MB
+	FROM msdb.dbo.backupset bs
+		JOIN msdb.dbo.backupmediafamily bmf ON bs.media_set_id = bmf.media_set_id
+	WHERE bs.database_name = 'QUANLYTHUVIEN'
+	ORDER BY bs.backup_start_date DESC
+END
+GO
+GRANT EXECUTE ON SP_SAOLUU TO R_QUANLY
+GO
+
+/* D.1 Sao luu bang cau lenh
+   Windows: N'C:\Backup\QUANLYTHUVIEN_FULL.bak'
+   Linux / Docker: N'/var/opt/mssql/data/QUANLYTHUVIEN_FULL.bak'
+
+BACKUP DATABASE QUANLYTHUVIEN
+TO DISK = N'/var/opt/mssql/data/QUANLYTHUVIEN_FULL.bak'
+WITH INIT, NAME = N'QUANLYTHUVIEN - Full Backup'
+
+BACKUP DATABASE QUANLYTHUVIEN
+TO DISK = N'/var/opt/mssql/data/QUANLYTHUVIEN_DIFF.bak'
+WITH DIFFERENTIAL, INIT, NAME = N'QUANLYTHUVIEN - Differential Backup'
+*/
+
+/* D.2 Xoa va phuc hoi CSDL tu file backup (FULL + DIFF)
+
+USE master
+GO
+ALTER DATABASE QUANLYTHUVIEN SET SINGLE_USER WITH ROLLBACK IMMEDIATE
+DROP DATABASE QUANLYTHUVIEN
+GO
+
+RESTORE DATABASE QUANLYTHUVIEN
+FROM DISK = N'/var/opt/mssql/data/QUANLYTHUVIEN_FULL.bak'
+WITH NORECOVERY, REPLACE
+
+RESTORE DATABASE QUANLYTHUVIEN
+FROM DISK = N'/var/opt/mssql/data/QUANLYTHUVIEN_DIFF.bak'
+WITH RECOVERY
+GO
+
+-- Sau khi restore, USER trong CSDL can duoc noi lai voi LOGIN (neu restore sang server khac)
+USE QUANLYTHUVIEN
+GO
+ALTER USER U_QUANLY WITH LOGIN = LG_QUANLY
+ALTER USER U_THUTHU WITH LOGIN = LG_THUTHU
+ALTER USER U_DOCGIA WITH LOGIN = LG_DOCGIA
+*/
